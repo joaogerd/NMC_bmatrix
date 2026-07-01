@@ -8,3 +8,7 @@ Corrigida a ordem das variáveis em `config/site.env` e
     WORK_ROOT: unbound variable
 
 quando `scripts/run_campaign.sh` carrega o arquivo sob `set -u`.
+
+
+Patch v1.1.2
+- Fix campaign inventory rendering for INPUT_MODE=download_gfs. The inventory now lists downloaded GFS GRIB files rather than unused prebuilt WPS FILE paths.

@@ -402,7 +402,11 @@ def materialize(env: dict[str, str]) -> None:
         rows.append(f"pair\t{valid:%Y-%m-%dT%H:%M:%SZ}\t{f048:%Y-%m-%dT%H:%M:%SZ}\t{f024:%Y-%m-%dT%H:%M:%SZ}\t")
     rows.append("")
     for init in INIT_TIMES:
-        product = (path(env, "RAW_GFS_ROOT") / f"gfs.{init:%Y%m%d%H}.pgrb2.0p25.f000") if mode == "raw_grib" else (path(env, "WPS_FILE_ROOT") / f"FILE:{init:%Y-%m-%d_%H}")
+        product = (
+            path(env, "RAW_GFS_ROOT") / f"gfs.{init:%Y%m%d%H}.pgrb2.0p25.f000"
+            if mode in {"raw_grib", "download_gfs"}
+            else path(env, "WPS_FILE_ROOT") / f"FILE:{init:%Y-%m-%d_%H}"
+        )
         rows.append(f"input\t{init:%Y-%m-%dT%H:%M:%SZ}\t\t\t{product}")
     (inventory_dir / "campaign_inventory.tsv").write_text("\n".join(rows) + "\n", encoding="utf-8")
 
