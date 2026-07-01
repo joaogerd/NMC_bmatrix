@@ -1,0 +1,7 @@
+# Site-specific JACI configuration. Start from config/site.env.example.
+config/site.env
+
+# Generated campaign configuration and runtime state.
+case/templates/
+case/inventory/
+case/static/
