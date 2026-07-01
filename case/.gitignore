@@ -1,0 +1,4 @@
+.monan-jedi-workflow/
+*.json
+templates/*.in
+inventory/campaign_inventory.tsv

@@ -1,0 +1,10 @@
+# Correção v1.1.1
+
+Corrigida a ordem das variáveis em `config/site.env` e
+`config/site.env.example`.
+
+`WORK_ROOT` agora é definido antes de `RAW_GFS_ROOT`, eliminando o erro:
+
+    WORK_ROOT: unbound variable
+
+quando `scripts/run_campaign.sh` carrega o arquivo sob `set -u`.
