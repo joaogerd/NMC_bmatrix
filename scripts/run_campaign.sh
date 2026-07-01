@@ -1,112 +1,126 @@
 #!/usr/bin/env bash
-# Orchestrate the NMC campaign only through safe workflow frontiers.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ENV_FILE="${ROOT}/config/site.env"
-CASE="${ROOT}/case"
+# The package location is immutable. Site configuration may define only runtime
+# and infrastructure paths, never package/script roots.
+PACKAGE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ENV_FILE="${PACKAGE_ROOT}/config/site.env"
+CASE_DIR="${PACKAGE_ROOT}/case"
+STATIC_CASE_DIR="${CASE_DIR}/static"
+STATIC_CYCLE="2010-10-23T00:00:00Z"
 
-if [[ ! -f "${ENV_FILE}" ]]; then
-  echo "ERROR: missing ${ENV_FILE}" >&2
-  exit 2
-fi
+init_config() {
+  if [[ ! -f "${ENV_FILE}" ]]; then
+    cp "${PACKAGE_ROOT}/config/site.env.example" "${ENV_FILE}"
+    echo "Created ${ENV_FILE}. Edit it, then rerun the command." >&2
+    exit 2
+  fi
+}
 
+reject_legacy_env() {
+  if grep -Eq '^[[:space:]]*(ROOT|WORK_ROOT|RAW_GFS_ROOT|WPS_OUTPUT_ROOT|MPAS_INIT_ROOT|MPAS_RUN_ROOT|BFLOW_WORKSPACE)=' "${ENV_FILE}"; then
+    cat >&2 <<'EOFMSG'
+ERROR: config/site.env is from an older split-root layout.
+This package accepts CAMPAIGN_ROOT as the only mutable runtime root.
+Replace config/site.env from config/site.env.example, then edit site paths.
+EOFMSG
+    exit 2
+  fi
+}
+
+run() { printf '+ '; printf '%q ' "$@"; printf '\n'; "$@"; }
+
+require_static() {
+  run "${WF}" mpas-init-validate "${STATIC_CASE_DIR}" --cycle "${STATIC_CYCLE}"
+}
+
+init_config
+reject_legacy_env
 # shellcheck disable=SC1090
 source "${ENV_FILE}"
+WF="${MONAN_JEDI_WORKFLOW_CMD:-monan-jedi-workflow}"
+NMC="${MPASNMC_CMD:-mpasnmc}"
+BFLOW="${MPASBFLOW_CMD:-mpasbflow}"
 
-WF_CMD="${MONAN_JEDI_WORKFLOW_CMD:-monan-jedi-workflow}"
-BMNMC_CMD="${MPASNMC_CMD:-mpasnmc}"
-BFLOW_CMD="${MPASBFLOW_CMD:-mpasbflow}"
-
-usage() {
-  cat <<EOF
-Usage: $0 COMMAND
-
-Commands:
-  bootstrap         Generate the JACI-specific experiment YAMLs/templates.
-  preflight         Check paths, five inputs and generated files.
-  plan              Resolve campaign geometry without running anything.
-  status            Show presence/absence of input, restart and mpasout products.
-  prepare-init      Fetch remote GFS when configured, execute WPS, and prepare init PBS files only.
-  download-inputs   Fetch the five remote GFS inputs and advance only the non-PBS preparation frontier.
-  submit-init       Submit the pending init frontier; does not wait.
-  prepare-forecast  After init products validate, prepare f024/f048 PBS files and verify namelist contract.
-  verify-namelist   Verify rendered f024/f048 namelist and streams against the selected 240-km profile.
-  submit-forecast   Submit the pending forecast frontier; does not wait.
-  finalize          Validate completed forecasts and export bflow-manifest.tsv.
-  run-all-wait      Blocking init -> forecast -> manifest sequence for a small test.
-  bflow             Validate manifest and run BFLOW in the bmatrix repository.
-EOF
-}
-
-run() {
-  printf '+ '
-  printf '%q ' "$@"
-  printf '\n'
-  "$@"
-}
-
-command="${1:-}"
-case "${command}" in
+case "${1:-}" in
   bootstrap)
-    run python3 "${ROOT}/scripts/configure_case.py" --env "${ENV_FILE}"
+    run python3 "${PACKAGE_ROOT}/scripts/configure_case.py" --env "${ENV_FILE}"
     ;;
   preflight)
-    run python3 "${ROOT}/scripts/preflight.py"
+    run python3 "${PACKAGE_ROOT}/scripts/preflight.py"
+    ;;
+  prepare-static)
+    run "${WF}" mpas-init-prepare "${STATIC_CASE_DIR}" --cycle "${STATIC_CYCLE}"
+    ;;
+  submit-static)
+    run "${WF}" mpas-init-submit "${STATIC_CASE_DIR}" --cycle "${STATIC_CYCLE}"
+    ;;
+  validate-static)
+    require_static
     ;;
   plan)
-    run "${WF_CMD}" nmc-campaign-plan "${CASE}"
+    run "${WF}" nmc-campaign-plan "${CASE_DIR}"
     ;;
   status)
-    run "${WF_CMD}" nmc-campaign-status "${CASE}" --checksum
+    run "${WF}" nmc-campaign-status "${CASE_DIR}" --checksum
     ;;
-  prepare-init|download-inputs)
+  prepare-init)
+    require_static
     if [[ "${INPUT_MODE,,}" == "download_gfs" ]]; then
-      run "${WF_CMD}" nmc-campaign-run "${CASE}" --execute --fetch-inputs
+      run "${WF}" nmc-campaign-run "${CASE_DIR}" --execute --fetch-inputs
     else
-      run "${WF_CMD}" nmc-campaign-run "${CASE}" --execute
+      run "${WF}" nmc-campaign-run "${CASE_DIR}" --execute
     fi
     ;;
   submit-init)
-    run "${WF_CMD}" nmc-campaign-run "${CASE}" --execute --submit
+    require_static
+    run "${WF}" nmc-campaign-run "${CASE_DIR}" --execute --submit
     ;;
   prepare-forecast)
-    run "${WF_CMD}" nmc-campaign-run "${CASE}" --execute
-    run python3 "${ROOT}/scripts/verify_namelist_contract.py"
-    ;;
-  verify-namelist)
-    run python3 "${ROOT}/scripts/verify_namelist_contract.py"
+    require_static
+    run "${WF}" nmc-campaign-run "${CASE_DIR}" --execute
+    run python3 "${PACKAGE_ROOT}/scripts/verify_namelist_contract.py"
     ;;
   submit-forecast)
-    run "${WF_CMD}" nmc-campaign-run "${CASE}" --execute --submit
+    require_static
+    run "${WF}" nmc-campaign-run "${CASE_DIR}" --execute --submit
     ;;
   finalize)
-    run "${WF_CMD}" nmc-campaign-run "${CASE}" --execute
-    run "${WF_CMD}" nmc-campaign-export-manifest "${CASE}" --checksum
-    ;;
-  run-all-wait)
-    run "${WF_CMD}" nmc-campaign-run "${CASE}" --execute --submit --wait --poll-seconds 30
-    run "${WF_CMD}" nmc-campaign-run "${CASE}" --execute --submit --wait --poll-seconds 30
-    run python3 "${ROOT}/scripts/verify_namelist_contract.py"
-    run "${WF_CMD}" nmc-campaign-run "${CASE}" --execute
-    run "${WF_CMD}" nmc-campaign-export-manifest "${CASE}" --checksum
+    require_static
+    run "${WF}" nmc-campaign-run "${CASE_DIR}" --execute
+    run "${WF}" nmc-campaign-export-manifest "${CASE_DIR}" --checksum
     ;;
   bflow)
-    manifest="${CAMPAIGN_ROOT}/bflow-manifest.tsv"
-    run "${BMNMC_CMD}" validate-manifest --manifest "${manifest}" --minimum-pairs 4
-    run "${BFLOW_CMD}" all \
-      --config "${BMATRIX_CONFIG}" \
-      --manifest "${manifest}" \
-      --workspace "${BFLOW_WORKSPACE}" \
-      --minimum-pairs 4 \
-      --clean-output
+    manifest="${CAMPAIGN_ROOT}/campaign/bflow-manifest.tsv"
+    run "${NMC}" validate-manifest --manifest "${manifest}" --minimum-pairs 4
+    run "${BFLOW}" all --config "${BMATRIX_CONFIG}" --manifest "${manifest}" \
+      --workspace "${CAMPAIGN_ROOT}/bflow" --minimum-pairs 4 --clean-output
     ;;
-  -h|--help|help|"")
-    usage
+  clean-generated)
+    rm -rf "${CASE_DIR}/templates" "${CASE_DIR}/inventory" "${STATIC_CASE_DIR}"
+    rm -f "${CASE_DIR}/workflow.yaml" "${CASE_DIR}/inputs.yaml" "${CASE_DIR}/wps.yaml" \
+      "${CASE_DIR}/mpas_init.yaml" "${CASE_DIR}/mpas.yaml"
+    rm -f "${PACKAGE_ROOT}/bin/run_with_jaci_env.sh" "${PACKAGE_ROOT}/bin/mpiexec_with_jaci_env.sh"
+    echo "Removed generated case files only. Runtime under CAMPAIGN_ROOT was not touched."
     ;;
   *)
-    echo "ERROR: unknown command ${command!r}" >&2
-    usage >&2
+    cat <<'EOFUSAGE'
+Usage:
+  bootstrap          generate both static and dynamic YAML/template contracts
+  preflight          validate software, WPS_GEOG, templates and one-root contract
+  prepare-static     prepare the one-time x1.<mesh>.static.nc PBS run
+  submit-static      submit the static interpolation job
+  validate-static    validate x1.<mesh>.static.nc after the job has completed
+  plan               write the NMC f024/f048 plan
+  prepare-init       require a validated static product, then fetch GFS/run WPS/prepare five init jobs
+  submit-init        submit five date-dependent init jobs
+  prepare-forecast   after valid inits, prepare eight f024/f048 forecast jobs
+  submit-forecast    submit eight forecast jobs
+  finalize           validate forecasts and export bflow-manifest.tsv
+  bflow              execute BFLOW from the exported manifest
+  status             inspect campaign products
+  clean-generated    remove only generated YAML/template files
+EOFUSAGE
     exit 2
     ;;
 esac

@@ -1,116 +1,116 @@
-# Campanha NMC MPAS — 22 a 25 de junho de 2026
+# NMC MPAS B-matrix campaign — 22–25 June 2026
 
-Este pacote prepara a campanha diária NMC que substitui o comando antigo
-`mpascycle nmc-range`. Ele cria quatro pares NMC: f048–f024 válidos às 00Z de
-22, 23, 24 e 25 de junho de 2026.
+This package produces four daily NMC pairs:
 
-## Para o seu caso: nenhum `FILE:*` e nenhum GRIB local
+| valid time | f048 init | f024 init |
+|---|---:|---:|
+| 2026-06-22 00Z | 2026-06-20 00Z | 2026-06-21 00Z |
+| 2026-06-23 00Z | 2026-06-21 00Z | 2026-06-22 00Z |
+| 2026-06-24 00Z | 2026-06-22 00Z | 2026-06-23 00Z |
+| 2026-06-25 00Z | 2026-06-23 00Z | 2026-06-24 00Z |
 
-Use o padrão já configurado:
+It uses five atmospheric initialization times, five GFS f000 files, five WPS
+runs, five dynamic MPAS-init jobs and eight MPAS forecasts.
 
-```bash
-INPUT_MODE=download_gfs
-```
+## Non-negotiable two-stage initialization contract
 
-Você **não precisa preencher** `WPS_FILE_ROOT` nem criar previamente
-`RAW_GFS_ROOT`. Durante `prepare-init`, o `monan-jedi-workflow` baixa os cinco
-GFS `f000` necessários, grava-os em `RAW_GFS_ROOT`, executa UNGRIB e prepara os
-cinco trabalhos `mpas_init_atmosphere`.
-
-Os ciclos de entrada são:
+The campaign follows the CD-CT/MONAN real-data split:
 
 ```text
-2026-06-20 00Z
-2026-06-21 00Z
-2026-06-22 00Z
-2026-06-23 00Z
-2026-06-24 00Z
+x1.10242.grid.nc + WPS_GEOG
+        │
+        └── one static interpolation run ──> static/x1.10242.static.nc
+                                                │
+GFS f000 ──> WPS FILE:YYYY-MM-DD_HH ───────────┼──> one dynamic init per date
+                                                │       mpas_init/YYYYMMDDHH/x1.10242.init.nc
+                                                ▼
+                                         f024 / f048 forecasts
 ```
 
-O pacote declara a fonte remota em `GFS_URL_TEMPLATE` no `config/site.env`.
-Como estas datas são históricas, teste primeiro a aquisição; a disponibilidade
-do objeto remoto depende da retenção do provedor. Caso algum objeto não esteja
-mais acessível, o comando falhará **antes** do WPS/MPAS e indicará o ciclo e a
-URL envolvidos. Nesse caso, baixe os cinco arquivos por uma fonte de arquivo
-aprovada e mude somente para `INPUT_MODE=raw_grib`.
+The static run has `config_static_interp = .true.` and no meteorological
+interpolation. Every dynamic initialization has `config_static_interp = .false.`,
+`config_vertical_grid = .true.`, `config_met_interp = .true.` and
+`config_met_prefix = 'FILE'`. The dynamic stream reads the validated
+`x1.10242.static.nc`, never the raw mesh grid.
 
-## Política de `config_dt` e namelist
+The static stage is derived from the CD-CT `make_static.bash`/`make_initatmos.bash`
+contract. It retains the installed MPAS 8.4 namelist fields and overrides only
+stage-defining settings, rather than copying an older MONAN namelist wholesale.
 
-Para `x1.10242` (~240 km), o pacote usa `CONFIG_DT=1200`. A alternativa `1440`
-é permitida somente após validar um f024 com o mesmo perfil físico, partição,
-streams e ambiente MPI. O pacote exige `namelist.atmosphere_240km` e preserva
-todo o seu conteúdo, alterando exclusivamente:
+## First setup
 
-```text
-config_start_time
-config_run_duration
-config_do_restart
-config_block_decomp_file_prefix
-config_dt
-```
-
-Antes de submeter forecast, ele compara os oito namelists/streams renderizados
-com esse contrato.
-
-## Preparação
-
-Edite apenas os caminhos institucionais já conhecidos em `config/site.env`:
-`WORKFLOW_REPO`, `BMATRIX_REPO`, `JACI_ENV_SCRIPT`, `INSTALL_ROOT`, `MESH_ROOT`,
-`TUTORIAL_PHYSICS_DIR` e `INVARIANT_FILE`. Mantenha `INPUT_MODE=download_gfs`.
-
-Garanta as branches requeridas:
+Do not reuse `config/site.env` from v2.0.x.
 
 ```bash
-git -C "$WORKFLOW_REPO" fetch origin feature/mpas-workflow-foundation
-git -C "$WORKFLOW_REPO" switch feature/mpas-workflow-foundation
-
-git -C "$BMATRIX_REPO" fetch origin feature/nmc-campaign-manifest
-git -C "$BMATRIX_REPO" switch feature/nmc-campaign-manifest
+cd /p/projetos/monan_das/$USER/work
+unzip -q /caminho/NMC_bmatrix_campaign_v2.1.0.zip
+mv NMC_bmatrix_campaign_v2.1.0 NMC_bmatrix
+cd NMC_bmatrix
+cp config/site.env.example config/site.env
+nano config/site.env
 ```
 
-Depois:
+The key new setting is `WPS_GEOG_ROOT`. `preflight` requires the geographic
+tile tree and specifically verifies `topo_gmted2010_30s/index`. The default is
+the JACI CD-CT location; correct it only when your site uses a different mount.
+
+## Execution order
 
 ```bash
 ./scripts/run_campaign.sh bootstrap
 ./scripts/run_campaign.sh preflight
+
+# One time for x1.10242; this does not download GFS or run UNGRIB.
+./scripts/run_campaign.sh prepare-static
+./scripts/run_campaign.sh submit-static
+qstat -u "$USER"
+./scripts/run_campaign.sh validate-static
+
+# Only after the static product validates.
 ./scripts/run_campaign.sh plan
-```
-
-`preflight` não exige que os GFS já existam quando o modo é `download_gfs`.
-
-## Execução por fronteiras
-
-```bash
-# Baixa GFS, roda UNGRIB e prepara os cinco jobs de init. Não submete PBS.
 ./scripts/run_campaign.sh prepare-init
-
-# Submete os cinco mpas_init_atmosphere.
 ./scripts/run_campaign.sh submit-init
+qstat -u "$USER"
 
-# Quando os inits terminarem: prepara oito forecasts f024/f048 e valida
-# o contrato completo de namelist/streams.
 ./scripts/run_campaign.sh prepare-forecast
-./scripts/run_campaign.sh verify-namelist
-
-# Submete os oito forecasts.
 ./scripts/run_campaign.sh submit-forecast
+qstat -u "$USER"
 
-# Depois de todos completarem: valida e produz bflow-manifest.tsv.
 ./scripts/run_campaign.sh finalize
-
-# Consome o manifesto no mpas-bmatrix-global.
 ./scripts/run_campaign.sh bflow
 ```
 
-Não use `run-all-wait` na primeira execução: ele mantém a sessão bloqueada e é
-pior para diagnóstico de uma campanha de oito forecasts. Acompanhe PBS com
-`qstat` e avance manualmente pelas fronteiras.
+`prepare-init`, `submit-init`, forecast preparation, forecast submission and
+finalization all refuse to proceed when the static product is not validated.
 
-## Produtos
+## Safety properties
 
-Os GRIBs ficam em `${RAW_GFS_ROOT}`. UNGRIB produz um `FILE:*` isolado por
-ciclo em `${WPS_OUTPUT_ROOT}`. Cada forecast recebe diretório próprio com
-`f24` ou `f48`, e a campanha só escreve `${CAMPAIGN_ROOT}/bflow-manifest.tsv`
-quando os quatro pares têm `restart` e `mpasout` válidos.
+- `CAMPAIGN_ROOT` is the only mutable runtime root.
+- `bootstrap` replaces only generated YAML/templates, never GFS, WPS products,
+  static products, init products or forecasts under `CAMPAIGN_ROOT`.
+- Static and dynamic MPAS init use separate case directories and separate PBS
+  submissions.
+- GFS/WPS are not consulted by the static stage.
+- The forecast namelist begins with `namelist.atmosphere_240km`; only start
+  time, duration, restart flag, partition prefix and `config_dt` are changed.
+- `preflight` rejects a configuration that mixes mesh-grid input, static
+  interpolation and date-dependent WPS input in the same init stage.
+- `prepare-init` stays non-submitting; PBS remains explicit.
 
-O ZIP não contém GFS, WPS, MPAS, malha, física ou matriz B.
+## Package commands
+
+```text
+bootstrap          generate static + dynamic contracts
+preflight          check paths, WPS_GEOG and rendered two-stage contract
+prepare-static     render the one static PBS job
+submit-static      submit static interpolation
+validate-static    validate static/x1.10242.static.nc
+plan               write NMC plan
+prepare-init       require static; fetch GFS/run WPS/prepare five dynamic inits
+submit-init        submit five dynamic inits
+prepare-forecast   prepare eight f024/f048 forecasts
+submit-forecast    submit eight forecasts
+finalize           validate forecasts and export bflow-manifest.tsv
+bflow              run BFLOW
+status             report campaign products
+```

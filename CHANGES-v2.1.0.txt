@@ -1,0 +1,12 @@
+v2.1.0
+
+- Replaces the invalid one-stage MPAS init construction with CD-CT-compatible
+  static and dynamic init stages.
+- Generates case/static/mpas_init.yaml for one x1.<mesh>.static.nc product.
+- Generates case/mpas_init.yaml only for date-dependent x1.<mesh>.init.nc products.
+- Adds WPS_GEOG_ROOT, STATIC_NPROC, STATIC_QUEUE and STATIC_WALLTIME settings.
+- Adds preflight checks for WPS_GEOG/topo_gmted2010_30s/index and for the
+  static/dynamic namelist and stream contracts.
+- Adds prepare-static, submit-static and validate-static commands.
+- Makes all NMC commands require validation of the static product before
+  dynamic initialization or forecast work.

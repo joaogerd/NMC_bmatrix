@@ -1,25 +1,12 @@
 {
-  "package": "NMC_MPAS_BMatrix_20260622_20260625_download_gfs",
-  "created_for": "NMC x1.10242 campaign 2026-06-22T00:00:00Z through 2026-06-25T00:00:00Z",
-  "input_mode_default": "download_gfs",
-  "gfs_cycles": [
-    "2026-06-20T00:00:00Z",
-    "2026-06-21T00:00:00Z",
-    "2026-06-22T00:00:00Z",
-    "2026-06-23T00:00:00Z",
-    "2026-06-24T00:00:00Z"
-  ],
+  "campaign": "2026-06-22T00:00:00Z to 2026-06-25T00:00:00Z, daily valid times",
   "config_dt_default": 1200,
-  "allowed_config_dt": [
-    1200,
-    1440
-  ],
-  "notes": [
-    "No GFS or WPS FILE input is assumed to already exist.",
-    "Remote availability for historical GFS must be tested at execution time."
-  ],
-  "package_version": "1.1.1",
-  "fixes": [
-    "Define WORK_ROOT before RAW_GFS_ROOT in site.env for nounset-safe sourcing."
-  ]
+  "forecasts": 8,
+  "generated_at": "2026-07-01",
+  "initialization_contract": "two-stage: x1.<mesh>.static.nc then x1.<mesh>.init.nc",
+  "initializations": 5,
+  "nmc_pairs": 4,
+  "package": "NMC_bmatrix_campaign",
+  "single_runtime_root": "CAMPAIGN_ROOT",
+  "version": "2.1.0"
 }

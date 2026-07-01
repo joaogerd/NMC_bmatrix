@@ -1,0 +1,4 @@
+v2.0.2
+- Fix package-root collision caused by a legacy ROOT variable in config/site.env.
+- Reject legacy multi-root environment files before execution.
+- Keep all package script references based on PACKAGE_ROOT.
