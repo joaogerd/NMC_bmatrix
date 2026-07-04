@@ -4,13 +4,14 @@
 #
 #   ./scripts/run_campaign.sh bootstrap
 #
-# The bootstrap command reads config/site.env, renders CD-CT templates, and
-# writes case/mpaswf.yaml. That generated file is the only configuration passed
-# to the mpaswf CLI.
+# Bootstrap reads config/site.env, renders CD-CT templates, and writes
+# case/mpaswf.yaml. That generated file is the only configuration passed to
+# the mpaswf CLI.
 
 paths:
   work_dir: /absolute/campaign/root
-  static_dir: /absolute/prebuilt/static/bundle
+  # Created by MPASWF during the init phase.
+  static_dir: /absolute/campaign/root/static
   gfs_dir: /absolute/campaign/root/inputs/gfs
   cdct_templates_dir: /absolute/NMC_bmatrix/case/templates
 
@@ -24,3 +25,9 @@ campaign:
   end_valid_time: "2026-06-25T00:00:00Z"
   interval_hours: 24
   leads_hours: [24, 48]
+
+static:
+  reference_time: "2010-10-23T00:00:00Z"
+  product_template: x1.10242.static.nc
+  # Mesh and support inputs only; do not list the generated static product.
+  links: []
