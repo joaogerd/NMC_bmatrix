@@ -6,6 +6,7 @@ thin campaign layer around **mpaswf** and the downstream BFLOW tooling.
 ```text
 GFS f000 files
   -> WPS / ungrib
+  -> MPAS static interpolation
   -> MPAS dynamic initialization
   -> MPAS f024 and f048 forecasts
   -> restart + da_state products
@@ -15,8 +16,8 @@ GFS f000 files
 ```
 
 `NMC_bmatrix` does not call `monan-jedi-workflow`, MPAS-JEDI, Obs2IODA, VBAL,
-HDIAG, NICAS, DIRAC, or SO. The first four stages are produced only by
-`mpaswf`; BFLOW is the downstream consumer.
+HDIAG, NICAS, DIRAC, or SO. `mpaswf` produces only the MPAS side; BFLOW is the
+downstream consumer.
 
 ## Fixed first campaign
 
@@ -29,31 +30,42 @@ The current configuration produces four daily NMC pairs:
 | 2026-06-24 00Z | 2026-06-22 00Z | 2026-06-23 00Z |
 | 2026-06-25 00Z | 2026-06-23 00Z | 2026-06-24 00Z |
 
-It therefore requires five GFS f000 files, five WPS products, five MPAS
-initial states, and eight forecasts.
+It requires five GFS f000 files, five WPS products, one static MPAS product,
+five dynamic MPAS initial states, and eight forecasts.
 
-## Static-input prerequisite
+## Static interpolation is generated
 
-The mesh-level CD-CT static product is a fixed external input in this first
-version. `STATIC_DIR` must contain `x1.10242.static.nc`; `MESH_ROOT` must
-provide the grid and 128-rank partition; `INVARIANT_FILE` must exist.
+The static CD-CT product is **not** an input. During the `init` phase, MPASWF
+runs `mpas_init_atmosphere` once with:
 
-The package deliberately does not create the static product yet. This keeps the
-first MPASWF integration restricted to the dynamic chain that must be proven:
-GFS, WPS, MPAS initialization, and f024/f048 forecasts.
+```text
+x1.10242.grid.nc + partition + WPS_GEOG
+  -> ${CAMPAIGN_ROOT}/static/x1.10242.static.nc
+```
+
+Every date-dependent dynamic initialization then consumes that validated static
+product together with its WPS `FILE:YYYY-MM-DD_HH` product:
+
+```text
+x1.10242.static.nc + FILE:YYYY-MM-DD_HH
+  -> ${CAMPAIGN_ROOT}/init/YYYYMMDDHH/x1.10242.init.YYYY-MM-DD_HH.00.00.nc
+```
+
+If the static product already exists and validates, it is reused. It is never
+listed as an external `STATIC_DIR` input.
 
 ## Installation
 
-Install `mpaswf` in the same Conda environment used on JACI. Version 0.1.1 or
-newer is required because the forecast templates use the `mpas_run_duration`
-placeholder.
+Install `mpaswf` 0.2.0 or newer in the same Conda environment used on JACI:
 
 ```bash
-conda activate mpaswf
+conda activate bmatrix
 cd /path/to/mpaswf
 python -m pip install --no-deps -e .
 
 cd /p/projetos/monan_das/$USER/work/NMC_bmatrix
+git pull --ff-only origin main
+mv config/site.env config/site.env.before-mpaswf 2>/dev/null || true
 cp config/site.env.example config/site.env
 nano config/site.env
 ```
@@ -64,25 +76,36 @@ nano config/site.env
 ./scripts/run_campaign.sh bootstrap
 ./scripts/run_campaign.sh preflight
 
-# Reuse valid GFS products or download absent products, then run WPS.
+# Reuse/download GFS and generate all WPS FILE:* products.
 ./scripts/run_campaign.sh prepare
 
-# First render PBS scripts. Review them under CAMPAIGN_ROOT/init/.
+# The first call renders only the static interpolation PBS job.
 ./scripts/run_campaign.sh init
 
-# Submit and wait only after review.
-./scripts/run_campaign.sh init --submit --wait
+# Submit static interpolation. After the job completes, call init again.
+./scripts/run_campaign.sh init --submit
+qstat -u "$USER"
+./scripts/run_campaign.sh init
 
-# Render, then submit f024/f048 jobs.
+# This now renders five dynamic initialization jobs.
+./scripts/run_campaign.sh init --submit
+qstat -u "$USER"
+
+# Render and submit the f024/f048 forecast jobs.
 ./scripts/run_campaign.sh forecast
-./scripts/run_campaign.sh forecast --submit --wait
+./scripts/run_campaign.sh forecast --submit
+qstat -u "$USER"
 
-# Validate MPAS products and write both manifests.
+# Validate all MPAS products and export both manifests.
 ./scripts/run_campaign.sh manifest
 
 # Consume the BFLOW manifest.
 ./scripts/run_campaign.sh bflow
 ```
+
+For a small smoke case, `init --submit --wait` can submit the static job, wait
+for its validation, and then advance to the dynamic layer in the same command.
+For the full JACI campaign, separate submissions are easier to inspect.
 
 ## Artifacts
 
@@ -108,9 +131,9 @@ valid_time	f048	f024
 
 ## Deliberate limitations
 
-- The first YAML remains small: paths, campaign dates, executables, fixed
-  resource settings, and product names only.
+- The first YAML remains small: paths, campaign dates, executables, fixed PBS
+  resources, and product names only.
 - Dynamics, physics, mesh, time step, streams, and namelist details still come
-  from the CD-CT reference templates rendered during `bootstrap`.
-- The static interpolation stage will be added only after the dynamic campaign
-  is validated end to end.
+  from CD-CT reference templates rendered during `bootstrap`.
+- The static, dynamic-init, and forecast products have separate run directories
+  and are reused only after conservative output validation.
