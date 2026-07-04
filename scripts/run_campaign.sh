@@ -38,8 +38,6 @@ shift || true
 case "${command}" in
   bootstrap)
     run python3 "${PACKAGE_ROOT}/scripts/configure_mpaswf.py" --env "${ENV_FILE}"
-    run python3 "${PACKAGE_ROOT}/scripts/augment_mpaswf_config.py" \
-      --env "${ENV_FILE}" --config "${MPASWF_CONFIG}"
     ;;
   preflight)
     require_bootstrap
@@ -88,9 +86,9 @@ case "${command}" in
     cat <<'EOFUSAGE'
 Usage:
   bootstrap              render the small mpaswf configuration and CD-CT templates
-  preflight              validate mpaswf, static inputs, executables, and templates
+  preflight              validate mpaswf, fixed assets, executables, and templates
   prepare [--force]      download missing GFS files and produce WPS FILE:* products
-  init [--submit --wait] prepare or submit all MPAS initialization jobs
+  init [--submit --wait] generate/reuse static.nc, then prepare or submit MPAS init jobs
   forecast [--submit --wait]
                          prepare or submit all f024/f048 MPAS forecast jobs
   manifest               validate MPAS products and write MPAS plus BFLOW manifests
