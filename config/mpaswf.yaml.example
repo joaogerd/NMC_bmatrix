@@ -1,1 +1,26 @@
-# placeholder
+# This file is a schema reference only.
+#
+# Do not edit it for a real campaign. Run:
+#
+#   ./scripts/run_campaign.sh bootstrap
+#
+# The bootstrap command reads config/site.env, renders CD-CT templates, and
+# writes case/mpaswf.yaml. That generated file is the only configuration passed
+# to the mpaswf CLI.
+
+paths:
+  work_dir: /absolute/campaign/root
+  static_dir: /absolute/prebuilt/static/bundle
+  gfs_dir: /absolute/campaign/root/inputs/gfs
+  cdct_templates_dir: /absolute/NMC_bmatrix/case/templates
+
+executables:
+  wps_dir: /absolute/WPS
+  mpas_init: /absolute/mpas_init_atmosphere
+  mpas_atmosphere: /absolute/mpas_atmosphere
+
+campaign:
+  start_valid_time: "2026-06-22T00:00:00Z"
+  end_valid_time: "2026-06-25T00:00:00Z"
+  interval_hours: 24
+  leads_hours: [24, 48]
