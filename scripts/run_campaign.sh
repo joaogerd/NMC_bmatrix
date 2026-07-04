@@ -38,6 +38,8 @@ shift || true
 case "${command}" in
   bootstrap)
     run python3 "${PACKAGE_ROOT}/scripts/configure_mpaswf.py" --env "${ENV_FILE}"
+    run python3 "${PACKAGE_ROOT}/scripts/augment_mpaswf_config.py" \
+      --env "${ENV_FILE}" --config "${MPASWF_CONFIG}"
     ;;
   preflight)
     require_bootstrap
