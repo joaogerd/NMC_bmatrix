@@ -1,116 +1,116 @@
-# NMC MPAS B-matrix campaign — 22–25 June 2026
+# NMC MPAS B-matrix campaign — MPASWF integration
 
-This package produces four daily NMC pairs:
+This repository defines one fixed MPAS forecast campaign for NMC pairs. It is a
+thin campaign layer around **mpaswf** and the downstream BFLOW tooling.
 
-| valid time | f048 init | f024 init |
+```text
+GFS f000 files
+  -> WPS / ungrib
+  -> MPAS dynamic initialization
+  -> MPAS f024 and f048 forecasts
+  -> restart + da_state products
+  -> MPAS manifest
+  -> BFLOW manifest
+  -> BFLOW
+```
+
+`NMC_bmatrix` does not call `monan-jedi-workflow`, MPAS-JEDI, Obs2IODA, VBAL,
+HDIAG, NICAS, DIRAC, or SO. The first four stages are produced only by
+`mpaswf`; BFLOW is the downstream consumer.
+
+## Fixed first campaign
+
+The current configuration produces four daily NMC pairs:
+
+| Valid time | f048 initialization | f024 initialization |
 |---|---:|---:|
 | 2026-06-22 00Z | 2026-06-20 00Z | 2026-06-21 00Z |
 | 2026-06-23 00Z | 2026-06-21 00Z | 2026-06-22 00Z |
 | 2026-06-24 00Z | 2026-06-22 00Z | 2026-06-23 00Z |
 | 2026-06-25 00Z | 2026-06-23 00Z | 2026-06-24 00Z |
 
-It uses five atmospheric initialization times, five GFS f000 files, five WPS
-runs, five dynamic MPAS-init jobs and eight MPAS forecasts.
+It therefore requires five GFS f000 files, five WPS products, five MPAS
+initial states, and eight forecasts.
 
-## Non-negotiable two-stage initialization contract
+## Static-input prerequisite
 
-The campaign follows the CD-CT/MONAN real-data split:
+The mesh-level CD-CT static product is a fixed external input in this first
+version. `STATIC_DIR` must contain `x1.10242.static.nc`; `MESH_ROOT` must
+provide the grid and 128-rank partition; `INVARIANT_FILE` must exist.
 
-```text
-x1.10242.grid.nc + WPS_GEOG
-        │
-        └── one static interpolation run ──> static/x1.10242.static.nc
-                                                │
-GFS f000 ──> WPS FILE:YYYY-MM-DD_HH ───────────┼──> one dynamic init per date
-                                                │       mpas_init/YYYYMMDDHH/x1.10242.init.nc
-                                                ▼
-                                         f024 / f048 forecasts
-```
+The package deliberately does not create the static product yet. This keeps the
+first MPASWF integration restricted to the dynamic chain that must be proven:
+GFS, WPS, MPAS initialization, and f024/f048 forecasts.
 
-The static run has `config_static_interp = .true.` and no meteorological
-interpolation. Every dynamic initialization has `config_static_interp = .false.`,
-`config_vertical_grid = .true.`, `config_met_interp = .true.` and
-`config_met_prefix = 'FILE'`. The dynamic stream reads the validated
-`x1.10242.static.nc`, never the raw mesh grid.
+## Installation
 
-The static stage is derived from the CD-CT `make_static.bash`/`make_initatmos.bash`
-contract. It retains the installed MPAS 8.4 namelist fields and overrides only
-stage-defining settings, rather than copying an older MONAN namelist wholesale.
-
-## First setup
-
-Do not reuse `config/site.env` from v2.0.x.
+Install `mpaswf` in the same Conda environment used on JACI. Version 0.1.1 or
+newer is required because the forecast templates use the `mpas_run_duration`
+placeholder.
 
 ```bash
-cd /p/projetos/monan_das/$USER/work
-unzip -q /caminho/NMC_bmatrix_campaign_v2.1.0.zip
-mv NMC_bmatrix_campaign_v2.1.0 NMC_bmatrix
-cd NMC_bmatrix
+conda activate mpaswf
+cd /path/to/mpaswf
+python -m pip install --no-deps -e .
+
+cd /p/projetos/monan_das/$USER/work/NMC_bmatrix
 cp config/site.env.example config/site.env
 nano config/site.env
 ```
 
-The key new setting is `WPS_GEOG_ROOT`. `preflight` requires the geographic
-tile tree and specifically verifies `topo_gmted2010_30s/index`. The default is
-the JACI CD-CT location; correct it only when your site uses a different mount.
-
-## Execution order
+## Workflow
 
 ```bash
 ./scripts/run_campaign.sh bootstrap
 ./scripts/run_campaign.sh preflight
 
-# One time for x1.10242; this does not download GFS or run UNGRIB.
-./scripts/run_campaign.sh prepare-static
-./scripts/run_campaign.sh submit-static
-qstat -u "$USER"
-./scripts/run_campaign.sh validate-static
+# Reuse valid GFS products or download absent products, then run WPS.
+./scripts/run_campaign.sh prepare
 
-# Only after the static product validates.
-./scripts/run_campaign.sh plan
-./scripts/run_campaign.sh prepare-init
-./scripts/run_campaign.sh submit-init
-qstat -u "$USER"
+# First render PBS scripts. Review them under CAMPAIGN_ROOT/init/.
+./scripts/run_campaign.sh init
 
-./scripts/run_campaign.sh prepare-forecast
-./scripts/run_campaign.sh submit-forecast
-qstat -u "$USER"
+# Submit and wait only after review.
+./scripts/run_campaign.sh init --submit --wait
 
-./scripts/run_campaign.sh finalize
+# Render, then submit f024/f048 jobs.
+./scripts/run_campaign.sh forecast
+./scripts/run_campaign.sh forecast --submit --wait
+
+# Validate MPAS products and write both manifests.
+./scripts/run_campaign.sh manifest
+
+# Consume the BFLOW manifest.
 ./scripts/run_campaign.sh bflow
 ```
 
-`prepare-init`, `submit-init`, forecast preparation, forecast submission and
-finalization all refuse to proceed when the static product is not validated.
+## Artifacts
 
-## Safety properties
-
-- `CAMPAIGN_ROOT` is the only mutable runtime root.
-- `bootstrap` replaces only generated YAML/templates, never GFS, WPS products,
-  static products, init products or forecasts under `CAMPAIGN_ROOT`.
-- Static and dynamic MPAS init use separate case directories and separate PBS
-  submissions.
-- GFS/WPS are not consulted by the static stage.
-- The forecast namelist begins with `namelist.atmosphere_240km`; only start
-  time, duration, restart flag, partition prefix and `config_dt` are changed.
-- `preflight` rejects a configuration that mixes mesh-grid input, static
-  interpolation and date-dependent WPS input in the same init stage.
-- `prepare-init` stays non-submitting; PBS remains explicit.
-
-## Package commands
+`mpaswf` writes the neutral MPAS product manifest:
 
 ```text
-bootstrap          generate static + dynamic contracts
-preflight          check paths, WPS_GEOG and rendered two-stage contract
-prepare-static     render the one static PBS job
-submit-static      submit static interpolation
-validate-static    validate static/x1.10242.static.nc
-plan               write NMC plan
-prepare-init       require static; fetch GFS/run WPS/prepare five dynamic inits
-submit-init        submit five dynamic inits
-prepare-forecast   prepare eight f024/f048 forecasts
-submit-forecast    submit eight forecasts
-finalize           validate forecasts and export bflow-manifest.tsv
-bflow              run BFLOW
-status             report campaign products
+${CAMPAIGN_ROOT}/products/mpas-forecast-manifest.tsv
 ```
+
+It contains `valid_time`, f048/f024 `da_state` paths, and their restart paths.
+`manifest` then derives the BFLOW-specific hand-off:
+
+```text
+${CAMPAIGN_ROOT}/products/bflow-manifest.tsv
+```
+
+The BFLOW manifest contains exactly:
+
+```tsv
+valid_time	f048	f024
+2026-06-22T00:00:00Z	/path/to/f048/mpasout.nc	/path/to/f024/mpasout.nc
+```
+
+## Deliberate limitations
+
+- The first YAML remains small: paths, campaign dates, executables, fixed
+  resource settings, and product names only.
+- Dynamics, physics, mesh, time step, streams, and namelist details still come
+  from the CD-CT reference templates rendered during `bootstrap`.
+- The static interpolation stage will be added only after the dynamic campaign
+  is validated end to end.
