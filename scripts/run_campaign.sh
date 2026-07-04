@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# The package location is immutable. Site configuration may define only runtime
-# and infrastructure paths, never package/script roots.
+# This repository configures an MPAS-only producer. It does not call
+# monan-jedi-workflow or execute any B-matrix algorithm directly.
 PACKAGE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="${PACKAGE_ROOT}/config/site.env"
 CASE_DIR="${PACKAGE_ROOT}/case"
-STATIC_CASE_DIR="${CASE_DIR}/static"
-STATIC_CYCLE="2010-10-23T00:00:00Z"
+MPASWF_CONFIG="${CASE_DIR}/mpaswf.yaml"
+
+run() { printf '+ '; printf '%q ' "$@"; printf '\n'; "$@"; }
 
 init_config() {
   if [[ ! -f "${ENV_FILE}" ]]; then
@@ -17,109 +18,83 @@ init_config() {
   fi
 }
 
-reject_legacy_env() {
-  if grep -Eq '^[[:space:]]*(ROOT|WORK_ROOT|RAW_GFS_ROOT|WPS_OUTPUT_ROOT|MPAS_INIT_ROOT|MPAS_RUN_ROOT|BFLOW_WORKSPACE)=' "${ENV_FILE}"; then
-    cat >&2 <<'EOFMSG'
-ERROR: config/site.env is from an older split-root layout.
-This package accepts CAMPAIGN_ROOT as the only mutable runtime root.
-Replace config/site.env from config/site.env.example, then edit site paths.
-EOFMSG
+require_bootstrap() {
+  if [[ ! -f "${MPASWF_CONFIG}" ]]; then
+    echo "Missing ${MPASWF_CONFIG}. Run: ./scripts/run_campaign.sh bootstrap" >&2
     exit 2
   fi
 }
 
-run() { printf '+ '; printf '%q ' "$@"; printf '\n'; "$@"; }
-
-require_static() {
-  run "${WF}" mpas-init-validate "${STATIC_CASE_DIR}" --cycle "${STATIC_CYCLE}"
-}
-
 init_config
-reject_legacy_env
 # shellcheck disable=SC1090
 source "${ENV_FILE}"
-WF="${MONAN_JEDI_WORKFLOW_CMD:-monan-jedi-workflow}"
+MPASWF="${MPASWF_CMD:-mpaswf}"
 NMC="${MPASNMC_CMD:-mpasnmc}"
 BFLOW="${MPASBFLOW_CMD:-mpasbflow}"
 
-case "${1:-}" in
+command="${1:-}"
+shift || true
+
+case "${command}" in
   bootstrap)
-    run python3 "${PACKAGE_ROOT}/scripts/configure_case.py" --env "${ENV_FILE}"
+    run python3 "${PACKAGE_ROOT}/scripts/configure_mpaswf.py" --env "${ENV_FILE}"
     ;;
   preflight)
-    run python3 "${PACKAGE_ROOT}/scripts/preflight.py"
+    require_bootstrap
+    run python3 "${PACKAGE_ROOT}/scripts/preflight_mpaswf.py" \
+      --config "${MPASWF_CONFIG}" --mpaswf "${MPASWF}"
     ;;
-  prepare-static)
-    run "${WF}" mpas-init-prepare "${STATIC_CASE_DIR}" --cycle "${STATIC_CYCLE}"
+  prepare)
+    require_bootstrap
+    run "${MPASWF}" run --phase prepare --config "${MPASWF_CONFIG}" "$@"
     ;;
-  submit-static)
-    run "${WF}" mpas-init-submit "${STATIC_CASE_DIR}" --cycle "${STATIC_CYCLE}"
+  init)
+    require_bootstrap
+    run "${MPASWF}" run --phase init --config "${MPASWF_CONFIG}" "$@"
     ;;
-  validate-static)
-    require_static
+  forecast)
+    require_bootstrap
+    run "${MPASWF}" run --phase forecast --config "${MPASWF_CONFIG}" "$@"
     ;;
-  plan)
-    run "${WF}" nmc-campaign-plan "${CASE_DIR}"
-    ;;
-  status)
-    run "${WF}" nmc-campaign-status "${CASE_DIR}" --checksum
-    ;;
-  prepare-init)
-    require_static
-    if [[ "${INPUT_MODE,,}" == "download_gfs" ]]; then
-      run "${WF}" nmc-campaign-run "${CASE_DIR}" --execute --fetch-inputs
-    else
-      run "${WF}" nmc-campaign-run "${CASE_DIR}" --execute
-    fi
-    ;;
-  submit-init)
-    require_static
-    run "${WF}" nmc-campaign-run "${CASE_DIR}" --execute --submit
-    ;;
-  prepare-forecast)
-    require_static
-    run "${WF}" nmc-campaign-run "${CASE_DIR}" --execute
-    run python3 "${PACKAGE_ROOT}/scripts/verify_namelist_contract.py"
-    ;;
-  submit-forecast)
-    require_static
-    run "${WF}" nmc-campaign-run "${CASE_DIR}" --execute --submit
-    ;;
-  finalize)
-    require_static
-    run "${WF}" nmc-campaign-run "${CASE_DIR}" --execute
-    run "${WF}" nmc-campaign-export-manifest "${CASE_DIR}" --checksum
+  manifest)
+    require_bootstrap
+    run "${MPASWF}" run --phase manifest --config "${MPASWF_CONFIG}"
+    run python3 "${PACKAGE_ROOT}/scripts/export_bflow_manifest.py" \
+      --input "${CAMPAIGN_ROOT}/products/mpas-forecast-manifest.tsv" \
+      --output "${CAMPAIGN_ROOT}/products/bflow-manifest.tsv"
     ;;
   bflow)
-    manifest="${CAMPAIGN_ROOT}/campaign/bflow-manifest.tsv"
+    manifest="${CAMPAIGN_ROOT}/products/bflow-manifest.tsv"
     run "${NMC}" validate-manifest --manifest "${manifest}" --minimum-pairs 4
     run "${BFLOW}" all --config "${BMATRIX_CONFIG}" --manifest "${manifest}" \
       --workspace "${CAMPAIGN_ROOT}/bflow" --minimum-pairs 4 --clean-output
     ;;
+  status)
+    require_bootstrap
+    find "${CAMPAIGN_ROOT}/.mpaswf" -maxdepth 1 -type f -name '*.json' -print -exec cat {} \; 2>/dev/null || true
+    if [[ -f "${CAMPAIGN_ROOT}/products/bflow-manifest.tsv" ]]; then
+      echo "--- ${CAMPAIGN_ROOT}/products/bflow-manifest.tsv"
+      cat "${CAMPAIGN_ROOT}/products/bflow-manifest.tsv"
+    fi
+    ;;
   clean-generated)
-    rm -rf "${CASE_DIR}/templates" "${CASE_DIR}/inventory" "${STATIC_CASE_DIR}"
-    rm -f "${CASE_DIR}/workflow.yaml" "${CASE_DIR}/inputs.yaml" "${CASE_DIR}/wps.yaml" \
-      "${CASE_DIR}/mpas_init.yaml" "${CASE_DIR}/mpas.yaml"
-    rm -f "${PACKAGE_ROOT}/bin/run_with_jaci_env.sh" "${PACKAGE_ROOT}/bin/mpiexec_with_jaci_env.sh"
-    echo "Removed generated case files only. Runtime under CAMPAIGN_ROOT was not touched."
+    rm -rf "${CASE_DIR}/templates"
+    rm -f "${CASE_DIR}/mpaswf.yaml"
+    echo "Removed generated mpaswf configuration and templates only. Runtime products under CAMPAIGN_ROOT were not touched."
     ;;
   *)
     cat <<'EOFUSAGE'
 Usage:
-  bootstrap          generate both static and dynamic YAML/template contracts
-  preflight          validate software, WPS_GEOG, templates and one-root contract
-  prepare-static     prepare the one-time x1.<mesh>.static.nc PBS run
-  submit-static      submit the static interpolation job
-  validate-static    validate x1.<mesh>.static.nc after the job has completed
-  plan               write the NMC f024/f048 plan
-  prepare-init       require a validated static product, then fetch GFS/run WPS/prepare five init jobs
-  submit-init        submit five date-dependent init jobs
-  prepare-forecast   after valid inits, prepare eight f024/f048 forecast jobs
-  submit-forecast    submit eight forecast jobs
-  finalize           validate forecasts and export bflow-manifest.tsv
-  bflow              execute BFLOW from the exported manifest
-  status             inspect campaign products
-  clean-generated    remove only generated YAML/template files
+  bootstrap              render the small mpaswf configuration and CD-CT templates
+  preflight              validate mpaswf, static inputs, executables, and templates
+  prepare [--force]      download missing GFS files and produce WPS FILE:* products
+  init [--submit --wait] prepare or submit all MPAS initialization jobs
+  forecast [--submit --wait]
+                         prepare or submit all f024/f048 MPAS forecast jobs
+  manifest               validate MPAS products and write MPAS plus BFLOW manifests
+  bflow                  run BFLOW using products/bflow-manifest.tsv
+  status                 print persisted mpaswf phase records and the BFLOW manifest
+  clean-generated        remove only generated mpaswf configuration/templates
 EOFUSAGE
     exit 2
     ;;
