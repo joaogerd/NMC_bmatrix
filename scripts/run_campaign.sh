@@ -38,6 +38,8 @@ shift || true
 case "${command}" in
   bootstrap)
     run python3 "${PACKAGE_ROOT}/scripts/configure_mpaswf.py" --env "${ENV_FILE}"
+    run python3 "${PACKAGE_ROOT}/scripts/normalize_cdct_templates.py" \
+      --templates "${CASE_DIR}/templates"
     ;;
   preflight)
     require_bootstrap
